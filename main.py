@@ -1,5 +1,5 @@
 import pygame
-import random
+import copy
 # Screen settings
 screen_width = 1000
 screen_height = 1000
@@ -97,9 +97,26 @@ def get_board_pos(mouse_pos):
     return row * 8 + col
 
 def simulate_move(board, pos, move):
-    new_board = board.copy()
-    new_board[pos + move] = new_board[pos]
+    new_board = copy.deepcopy(board)
+    piece = new_board[pos]
+    target = pos + move
+
+    # Handle en passant
+    if piece[-1] == "P" and abs(move) in [7, 9] and new_board[target] == "-":
+        if piece[0] == "w" and pos // 8 == 3:
+            new_board[target + 8] = "-"
+        elif piece[0] == "b" and pos // 8 == 4:
+            new_board[target - 8] = "-"
+
+    new_board[target] = piece
     new_board[pos] = "-"
+    
+    # Handle pawn promotion
+    if piece == "wP" and target < 8:
+        new_board[target] = "wQ"
+    if piece == "bP" and target > 55:
+        new_board[target] = "bQ"
+    
     return new_board
 
 def get_moves(pos):
@@ -117,13 +134,11 @@ def get_moves(pos):
         moves= get_queen_moves(pos, chess_board)
     elif piece[-1] == "K":
         moves= get_king_moves(pos, chess_board)
-    print(moves)
     valid_moves = []
     for move in moves:
         new_board = simulate_move(chess_board, pos, move)
         if not check_status(new_board, piece[0]):
             valid_moves.append(move)
-    print(valid_moves)
     return valid_moves
 
 def get_pawn_moves(pos, board):
@@ -351,6 +366,9 @@ def danger_squares(board, color):
     return squares
 
 def check_status(board, color):
+    king = color +"K"
+    if king not in board:
+        return False
     king_pos = board.index(color + "K")
     opponent = "b" if color == "w" else "w"
     return king_pos in danger_squares(board,opponent)
@@ -365,42 +383,143 @@ def checkmate(color):
                     return False
     return True
 
-# Evaluate the board
-def evaluate_board(board):
-    piece_values = { "P": 1, "N": 3, "B": 3, "R": 5, "Q": 9, "K": 0 }
-    score = 0
+def generate_moves(board, turn):
+    all_moves = []
     for i, piece in enumerate(board):
-        if piece != "-":
-            if piece[0] == "w":
-                score += piece_values[piece[1]]
-                if piece == "wK" and i > 55:
-                    score += 0.25
-                if piece[-1] == "P":
-                    score += 0.1 * (7 - i // 8)
-            elif piece[0] == "b":
-                score -= piece_values[piece[1]]
-                if piece == "bK" and i < 8:
-                    score -= 0.25
-                if piece[-1] == "P":
-                    score -= 0.1 * (i // 8)
-    return score
+        if piece != "-" and piece[0] == turn:
+            moves = get_moves(i)
+            for move in moves:
+                temp_board = simulate_move(board, i, move)
+                if not check_status(temp_board, turn):
+                    all_moves.append((i, move, temp_board))
+    return all_moves
+
+# Evaluate the board
+# Recursive function given depth that goes through possible moves and whites responses and finds move that gives black best score
+# If depth is 0, return the score of the board
+def evaluate_board(board, depth, turn):
+    piece_values = { "P": 1000, "N": 3000, "B": 3000, "R": 5000, "Q": 9000, "K": 0 }
+    if depth == 0:
+        score = 0
+        for i, piece in enumerate(board):
+            if piece != "-":
+                value = piece_values.get(piece[1], 0)
+                position_bonus = piece_square_bonus(piece, i)  # New
+                mobility_bonus = len(get_moves(i)) * 10  # New
+                
+                if piece[0] == "b":
+                    score += value + position_bonus + mobility_bonus
+                else:
+                    score -= value + position_bonus + mobility_bonus
+
+        print(f"[Depth 0] Evaluated Score: {score}")
+        return score
+    
+    best_score = float("-inf") if turn == "b" else float("inf")
+    all_moves = generate_moves(board, turn)
+
+    for _, _, temp_board in all_moves:
+        score = evaluate_board(temp_board, depth - 1, "w" if turn == "w" else "b")
+        if turn == "b":
+            best_score = max(best_score, score)
+        else:
+            best_score = min(best_score, score)        
+    return best_score
+
+def piece_square_bonus(piece, pos):
+    # Piece-square tables for strategic play
+    tables = {
+        "P": [
+             0,  0,  0,  0,  0,  0,  0,  0,
+           -10, -5, -5,  0,  0, -5, -5, -10,
+            -5, -5,  0,  0,  0,  0, -5, -5,
+            -5,  0,  0,  5,  5,  0,  0, -5,
+             0,  0,  5, 15, 15,  5,  0,  0,
+             0,  5, 10, 20, 20, 10,  5,  0,
+             5, 10, 15, 25, 25, 15, 10,  5,
+             0,  5, 10, 15, 20, 15, 10,  5
+        ],
+        "N": [
+            -50, -40, -30, -30, -30, -30, -40, -50,
+            -40, -20,   0,   5,   5,   0, -20, -40,
+            -30,   5,  10,  15,  15,  10,   5, -30,
+            -30,   0,  15,  20,  20,  15,   0, -30,
+            -30,   5,  15,  20,  20,  15,   5, -30,
+            -30,   0,  10,  15,  15,  10,   0, -30,
+            -40, -20,   0,   0,   0,   0, -20, -40,
+            -50, -40, -30, -30, -30, -30, -40, -50
+        ],
+        "B": [
+            -20, -10, -10, -10, -10, -10, -10, -20,
+            -10,   0,   5,   0,   0,   5,   0, -10,
+            -10,   5,  10,  10,  10,  10,   5, -10,
+            -10,   0,  10,  10,  10,  10,   0, -10,
+            -10,   5,  10,  10,  10,  10,   5, -10,
+            -10,   0,   5,   0,   0,   5,   0, -10,
+            -10, -10,   0,   0,   0,   0, -10, -10,
+            -20, -10, -10, -10, -10, -10, -10, -20
+        ],
+        "R": [
+             0,   0,   0,   5,   5,   0,   0,   0,
+             5,   5,   5,   5,   5,   5,   5,   5,
+            -5,   0,   0,   0,   0,   0,   0,  -5,
+            -5,   0,   0,   0,   0,   0,   0,  -5,
+            -5,   0,   0,   0,   0,   0,   0,  -5,
+            -5,   0,   0,   0,   0,   0,   0,  -5,
+             0,   0,   5,  10,  10,   5,   0,   0,
+             0,   0,   5,  10,  10,   5,   0,   0
+        ],
+        "Q": [
+            -20, -10, -10,  -5,  -5, -10, -10, -20,
+            -10,   0,   5,   0,   0,   0,   0, -10,
+            -10,   0,   5,   5,   5,   5,   0, -10,
+             0,    0,   5,   5,   5,   5,   0,  -5,
+             0,    0,   5,   5,   5,   5,   0,  -5,
+            -10,   5,   5,   5,   5,   5,   0, -10,
+            -10,   0,   0,   0,   0,   0,   0, -10,
+            -20, -10, -10,  -5,  -5, -10, -10, -20
+        ],
+        "K": [
+             20,  30,  10,   0,   0,  10,  30,  20,
+             20,  20,   0,   0,   0,   0,  20,  20,
+            -10, -20, -20, -20, -20, -20, -20, -10,
+            -20, -30, -30, -40, -40, -30, -30, -20,
+            -30, -40, -40, -50, -50, -40, -40, -30,
+            -30, -40, -40, -50, -50, -40, -40, -30,
+            -30, -40, -40, -50, -50, -40, -40, -30,
+            -30, -40, -40, -50, -50, -40, -40, -30
+        ]
+    }
+    
+    # Extract piece type and color
+    color, piece_type = piece[0], piece[1]
+    
+    if piece_type in tables:
+        # Black should see the board from their perspective (flipped)
+        if color == "b":
+            return -tables[piece_type][pos]
+        else:
+            return tables[piece_type][63 - pos]  # Flip for White
+            
+    return 0  # Default return for unknown pieces
+
             
 
 def get_comp_move():
-    best_move = (12,16)
-    best_score =  float(0)
-    for i, piece in enumerate(chess_board):
-        if piece != "-" and piece[0] == "b":
-            moves = get_moves(i)
-            for move in moves:
-                temp_board = simulate_move(chess_board, i, move)
-                if not check_status(temp_board, "b"):
-                    score = evaluate_board(temp_board)
-                    if score < best_score:
-                        best_score = score
-                        best_move = (i, move)
-    print(best_score)
-    print(best_move)
+    best_move = None
+    best_score =  float("-inf")
+    depth = 2
+
+    all_moves = generate_moves(chess_board, "b")
+
+    for i, move, temp_board in all_moves:
+        score = evaluate_board(temp_board, depth - 1, "w")
+        print(f"Move {i} -> {move} has score {score}")
+        if score > best_score:
+            best_score = score
+            best_move = (i, move)
+    
+
     return best_move
 
 # Game loop
@@ -414,10 +533,13 @@ while running:
     draw_chess_board()
     refresh_pieces(selected_piece if dragging else None)
     if turn == "b":
-        # make random move
-        get_comp_move()
-        move_piece(get_comp_move()[0], get_comp_move()[1])
-        turn = "w"
+        comp_move = get_comp_move()
+        if comp_move:
+            move_piece(comp_move[0], comp_move[1])
+            turn = "w"
+        else:
+            print("No valid moves for black")
+            running = False
         
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -428,6 +550,7 @@ while running:
             if chess_board[pos] != "-":
                 selected_piece = pos
                 dragging = True
+            
         elif event.type == pygame.MOUSEBUTTONUP:
             if dragging:
                 mouse_pos = pygame.mouse.get_pos()
