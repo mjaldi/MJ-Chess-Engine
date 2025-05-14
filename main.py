@@ -1,5 +1,5 @@
 import pygame
-import copy
+import random
 # Screen settings
 screen_width = 1000
 screen_height = 1000
@@ -97,26 +97,9 @@ def get_board_pos(mouse_pos):
     return row * 8 + col
 
 def simulate_move(board, pos, move):
-    new_board = copy.deepcopy(board)
-    piece = new_board[pos]
-    target = pos + move
-
-    # Handle en passant
-    if piece[-1] == "P" and abs(move) in [7, 9] and new_board[target] == "-":
-        if piece[0] == "w" and pos // 8 == 3:
-            new_board[target + 8] = "-"
-        elif piece[0] == "b" and pos // 8 == 4:
-            new_board[target - 8] = "-"
-
-    new_board[target] = piece
+    new_board = board.copy()
+    new_board[pos + move] = new_board[pos]
     new_board[pos] = "-"
-    
-    # Handle pawn promotion
-    if piece == "wP" and target < 8:
-        new_board[target] = "wQ"
-    if piece == "bP" and target > 55:
-        new_board[target] = "bQ"
-    
     return new_board
 
 def get_moves(pos):
@@ -134,11 +117,13 @@ def get_moves(pos):
         moves= get_queen_moves(pos, chess_board)
     elif piece[-1] == "K":
         moves= get_king_moves(pos, chess_board)
+    print(moves)
     valid_moves = []
     for move in moves:
         new_board = simulate_move(chess_board, pos, move)
         if not check_status(new_board, piece[0]):
             valid_moves.append(move)
+    print(valid_moves)
     return valid_moves
 
 def get_pawn_moves(pos, board):
@@ -366,9 +351,6 @@ def danger_squares(board, color):
     return squares
 
 def check_status(board, color):
-    king = color +"K"
-    if king not in board:
-        return False
     king_pos = board.index(color + "K")
     opponent = "b" if color == "w" else "w"
     return king_pos in danger_squares(board,opponent)
@@ -383,143 +365,102 @@ def checkmate(color):
                     return False
     return True
 
-def generate_moves(board, turn):
-    all_moves = []
+# Evaluate the board
+def evaluate_board(board):
+    piece_values = {"P": 100, "N": 280, "B": 320, "R": 479, "Q": 929, "K": 60000}
+    white_piece_tables = {
+    'P': (   0,   0,   0,   0,   0,   0,   0,   0,
+            78,  83,  86,  73, 102,  82,  85,  90,
+             7,  29,  21,  44,  40,  31,  44,   7,
+           -17,  16,  -2,  15,  14,   0,  15, -13,
+           -26,   3,  10,   9,   6,   1,   0, -23,
+           -22,   9,   5, -11, -10,  -2,   3, -19,
+           -31,   8,  -7, -37, -36, -14,   3, -31,
+             0,   0,   0,   0,   0,   0,   0,   0),
+    'N': ( -66, -53, -75, -75, -10, -55, -58, -70,
+            -3,  -6, 100, -36,   4,  62,  -4, -14,
+            10,  67,   1,  74,  73,  27,  62,  -2,
+            24,  24,  45,  37,  33,  41,  25,  17,
+            -1,   5,  31,  21,  22,  35,   2,   0,
+           -18,  10,  13,  22,  18,  15,  11, -14,
+           -23, -15,   2,   0,   2,   0, -23, -20,
+           -74, -23, -26, -24, -19, -35, -22, -69),
+    'B': ( -59, -78, -82, -76, -23,-107, -37, -50,
+           -11,  20,  35, -42, -39,  31,   2, -22,
+            -9,  39, -32,  41,  52, -10,  28, -14,
+            25,  17,  20,  34,  26,  25,  15,  10,
+            13,  10,  17,  23,  17,  16,   0,   7,
+            14,  25,  24,  15,   8,  25,  20,  15,
+            19,  20,  11,   6,   7,   6,  20,  16,
+            -7,   2, -15, -12, -14, -15, -10, -10),
+    'R': (  35,  29,  33,   4,  37,  33,  56,  50,
+            55,  29,  56,  67,  55,  62,  34,  60,
+            19,  35,  28,  33,  45,  27,  25,  15,
+             0,   5,  16,  13,  18,  -4,  -9,  -6,
+           -28, -35, -16, -21, -13, -29, -46, -30,
+           -42, -28, -42, -25, -25, -35, -26, -46,
+           -53, -38, -31, -26, -29, -43, -44, -53,
+           -30, -24, -18,   5,  -2, -18, -31, -32),
+    'Q': (   6,   1,  -8,-104,  69,  24,  88,  26,
+            14,  32,  60, -10,  20,  76,  57,  24,
+            -2,  43,  32,  60,  72,  63,  43,   2,
+             1, -16,  22,  17,  25,  20, -13,  -6,
+           -14, -15,  -2,  -5,  -1, -10, -20, -22,
+           -30,  -6, -13, -11, -16, -11, -16, -27,
+           -36, -18,   0, -19, -15, -15, -21, -38,
+           -39, -30, -31, -13, -31, -36, -34, -42),
+    'K': (   4,  54,  47, -99, -99,  60,  83, -62,
+           -32,  10,  55,  56,  56,  55,  10,   3,
+           -62,  12, -57,  44, -67,  28,  37, -31,
+           -55,  50,  11,  -4, -19,  13,   0, -49,
+           -55, -43, -52, -28, -51, -47,  -8, -50,
+           -47, -42, -43, -79, -64, -32, -29, -32,
+            -4,   3, -14, -50, -57, -18,  13,   4,
+            17,  30,  -3, -14,   6,  -1,  40,  18),
+}
+
+    black_piece_tables = {piece: tuple(flip_table(table)) for piece, table in white_piece_tables.items()}
+
+    score = 0
     for i, piece in enumerate(board):
-        if piece != "-" and piece[0] == turn:
+        if piece != "-":
+            if piece[0] == "w":
+                score += piece_values[piece[1]]
+                score += white_piece_tables[piece[1]][i]
+            elif piece[0] == "b":
+                score -= piece_values[piece[1]]
+                score += black_piece_tables[piece[1]][i]
+    return score
+
+def flip_table(table):
+    return sum([list(table[i*8:(i+1)*8]) for i in reversed(range(8))], [])
+
+def is_capture(move,board):
+    if chess_board[move[1]] != "-":
+        return True
+    else:
+        return False
+
+def get_comp_move(depth):
+    best_move = None
+    best_score = float('inf')
+
+    for i, piece in enumerate(chess_board):
+        if piece != "-" and piece[0] == "b":
             moves = get_moves(i)
             for move in moves:
-                temp_board = simulate_move(board, i, move)
-                if not check_status(temp_board, turn):
-                    all_moves.append((i, move, temp_board))
-    return all_moves
+                temp_board = simulate_move(chess_board, i, move)
+                if not check_status(temp_board, "b"):
+                    score = evaluate_board(temp_board)
+                    if score < best_score:
+                        best_score = score
+                        best_move = (i, move)
 
-# Evaluate the board
-# Recursive function given depth that goes through possible moves and whites responses and finds move that gives black best score
-# If depth is 0, return the score of the board
-def evaluate_board(board, depth, turn):
-    piece_values = { "P": 1000, "N": 3000, "B": 3000, "R": 5000, "Q": 9000, "K": 0 }
-    if depth == 0:
-        score = 0
-        for i, piece in enumerate(board):
-            if piece != "-":
-                value = piece_values.get(piece[1], 0)
-                position_bonus = piece_square_bonus(piece, i)  # New
-                mobility_bonus = len(get_moves(i)) * 10  # New
-                
-                if piece[0] == "b":
-                    score += value + position_bonus + mobility_bonus
-                else:
-                    score -= value + position_bonus + mobility_bonus
-
-        print(f"[Depth 0] Evaluated Score: {score}")
-        return score
-    
-    best_score = float("-inf") if turn == "b" else float("inf")
-    all_moves = generate_moves(board, turn)
-
-    for _, _, temp_board in all_moves:
-        score = evaluate_board(temp_board, depth - 1, "w" if turn == "w" else "b")
-        if turn == "b":
-            best_score = max(best_score, score)
-        else:
-            best_score = min(best_score, score)        
-    return best_score
-
-def piece_square_bonus(piece, pos):
-    # Piece-square tables for strategic play
-    tables = {
-        "P": [
-             0,  0,  0,  0,  0,  0,  0,  0,
-           -10, -5, -5,  0,  0, -5, -5, -10,
-            -5, -5,  0,  0,  0,  0, -5, -5,
-            -5,  0,  0,  5,  5,  0,  0, -5,
-             0,  0,  5, 15, 15,  5,  0,  0,
-             0,  5, 10, 20, 20, 10,  5,  0,
-             5, 10, 15, 25, 25, 15, 10,  5,
-             0,  5, 10, 15, 20, 15, 10,  5
-        ],
-        "N": [
-            -50, -40, -30, -30, -30, -30, -40, -50,
-            -40, -20,   0,   5,   5,   0, -20, -40,
-            -30,   5,  10,  15,  15,  10,   5, -30,
-            -30,   0,  15,  20,  20,  15,   0, -30,
-            -30,   5,  15,  20,  20,  15,   5, -30,
-            -30,   0,  10,  15,  15,  10,   0, -30,
-            -40, -20,   0,   0,   0,   0, -20, -40,
-            -50, -40, -30, -30, -30, -30, -40, -50
-        ],
-        "B": [
-            -20, -10, -10, -10, -10, -10, -10, -20,
-            -10,   0,   5,   0,   0,   5,   0, -10,
-            -10,   5,  10,  10,  10,  10,   5, -10,
-            -10,   0,  10,  10,  10,  10,   0, -10,
-            -10,   5,  10,  10,  10,  10,   5, -10,
-            -10,   0,   5,   0,   0,   5,   0, -10,
-            -10, -10,   0,   0,   0,   0, -10, -10,
-            -20, -10, -10, -10, -10, -10, -10, -20
-        ],
-        "R": [
-             0,   0,   0,   5,   5,   0,   0,   0,
-             5,   5,   5,   5,   5,   5,   5,   5,
-            -5,   0,   0,   0,   0,   0,   0,  -5,
-            -5,   0,   0,   0,   0,   0,   0,  -5,
-            -5,   0,   0,   0,   0,   0,   0,  -5,
-            -5,   0,   0,   0,   0,   0,   0,  -5,
-             0,   0,   5,  10,  10,   5,   0,   0,
-             0,   0,   5,  10,  10,   5,   0,   0
-        ],
-        "Q": [
-            -20, -10, -10,  -5,  -5, -10, -10, -20,
-            -10,   0,   5,   0,   0,   0,   0, -10,
-            -10,   0,   5,   5,   5,   5,   0, -10,
-             0,    0,   5,   5,   5,   5,   0,  -5,
-             0,    0,   5,   5,   5,   5,   0,  -5,
-            -10,   5,   5,   5,   5,   5,   0, -10,
-            -10,   0,   0,   0,   0,   0,   0, -10,
-            -20, -10, -10,  -5,  -5, -10, -10, -20
-        ],
-        "K": [
-             20,  30,  10,   0,   0,  10,  30,  20,
-             20,  20,   0,   0,   0,   0,  20,  20,
-            -10, -20, -20, -20, -20, -20, -20, -10,
-            -20, -30, -30, -40, -40, -30, -30, -20,
-            -30, -40, -40, -50, -50, -40, -40, -30,
-            -30, -40, -40, -50, -50, -40, -40, -30,
-            -30, -40, -40, -50, -50, -40, -40, -30,
-            -30, -40, -40, -50, -50, -40, -40, -30
-        ]
-    }
-    
-    # Extract piece type and color
-    color, piece_type = piece[0], piece[1]
-    
-    if piece_type in tables:
-        # Black should see the board from their perspective (flipped)
-        if color == "b":
-            return -tables[piece_type][pos]
-        else:
-            return tables[piece_type][63 - pos]  # Flip for White
-            
-    return 0  # Default return for unknown pieces
-
-            
-
-def get_comp_move():
-    best_move = None
-    best_score =  float("-inf")
-    depth = 2
-
-    all_moves = generate_moves(chess_board, "b")
-
-    for i, move, temp_board in all_moves:
-        score = evaluate_board(temp_board, depth - 1, "w")
-        print(f"Move {i} -> {move} has score {score}")
-        if score > best_score:
-            best_score = score
-            best_move = (i, move)
-    
-
+    print("Best Score:", best_score)
+    print("Best Move:", best_move)
+    return best_move if best_move else (12, 16)  # fallback
+    print(best_score)
+    print(best_move)
     return best_move
 
 # Game loop
@@ -533,13 +474,10 @@ while running:
     draw_chess_board()
     refresh_pieces(selected_piece if dragging else None)
     if turn == "b":
-        comp_move = get_comp_move()
-        if comp_move:
-            move_piece(comp_move[0], comp_move[1])
-            turn = "w"
-        else:
-            print("No valid moves for black")
-            running = False
+        # make random move
+        move = get_comp_move(1)
+        move_piece(move[0], move[1])
+        turn = "w"
         
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -550,7 +488,6 @@ while running:
             if chess_board[pos] != "-":
                 selected_piece = pos
                 dragging = True
-            
         elif event.type == pygame.MOUSEBUTTONUP:
             if dragging:
                 mouse_pos = pygame.mouse.get_pos()
