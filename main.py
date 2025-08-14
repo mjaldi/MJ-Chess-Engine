@@ -128,43 +128,25 @@ def get_moves(pos):
 
 def get_pawn_moves(pos, board):
     moves = []
-    # En passant
-    if last_move:
-        if board[pos][-1] == "P":
-            if pos % 8 != 0 and pos - 1 == last_move[1]:
-                if pos // 8 == 3 and board[pos][0] == "w":
-                    moves.append(-9)
-                    board[pos-1] = "-"
-                if pos // 8 == 4 and board[pos][0] == "b":
-                    moves.append(7)
-                    board[pos-1] = "-"
-            if pos % 8 != 7 and pos + 1 == last_move[1]:
-                if pos // 8 == 3 and board[pos][0] == "w":
-                    moves.append(-7)
-                    board[pos+1] = "-"
-                if pos // 8 == 4 and board[pos][0] == "b":
-                    moves.append(9)
-                    board[pos+1] = "-"
-            
-                moves.append(9)
-    if board[pos][0] == "w":
-        if board[pos-8] == "-":
-            moves.append(-8)
-        if pos // 8 == 6 and board[pos-16] == "-":
-            moves.append(-16)
-        if pos % 8 != 0 and board[pos-9][0] == "b":
-            moves.append(-9)
-        if pos % 8 != 7 and board[pos-7][0] == "b":
-            moves.append(-7)
-    else:
-        if board[pos+8] == "-":
-            moves.append(8)
-        if pos // 8 == 1:
-            moves.append(16)
-        if pos % 8 != 0 and board[pos-9][0] == "w":
-            moves.append(9)
-        if pos % 8 != 7 and board[pos-7][0] == "w":
-            moves.append(7)
+    color = board[pos][0]
+    direction = -8 if color == "w" else 8
+    start_row = 6 if color == "w" else 1
+
+    # Forward move
+    if board[pos + direction] == "-":
+        moves.append(direction)
+        # Initial 2-tile jump
+        if (pos // 8 == start_row) and board[pos + 2 * direction] == "-":
+            moves.append(2 * direction)
+
+    # Captures
+    for diag in [-9, -7] if color == "w" else [7, 9]:
+        target = pos + diag
+        if 0 <= target < 64 and abs((pos % 8) - (target % 8)) == 1:
+            if board[target] != "-" and board[target][0] != color:
+                moves.append(diag)
+            # Add en passant logic here if needed
+
     return moves
 
 def get_rook_moves(pos, board):
@@ -434,7 +416,40 @@ def evaluate_board(board):
 
 def flip_table(table):
     return sum([list(table[i*8:(i+1)*8]) for i in reversed(range(8))], [])
+def game_over(board):
+    if "wK" not in board or "bK" not in board:
+        return True
+    return False
 
+def minimax(board, depth, alpha, beta, maximizing_player):
+    if depth == 0 or game_over(board):
+        return evaluate_board(board)
+
+    if maximizing_player:
+        max_eval = float('-inf')
+        for i, piece in enumerate(board):
+            if piece != "-" and piece[0] == "b":
+                for move in get_moves(i):
+                    new_board = simulate_move(board, i, move)
+                    eval = minimax(new_board, depth-1, alpha, beta, False)
+                    max_eval = max(max_eval, eval)
+                    alpha = max(alpha, eval)
+                    if beta <= alpha:
+                        break
+        return max_eval
+    else:
+        min_eval = float('inf')
+        for i, piece in enumerate(board):
+            if piece != "-" and piece[0] == "w":
+                for move in get_moves(i):
+                    new_board = simulate_move(board, i, move)
+                    eval = minimax(new_board, depth-1, alpha, beta, True)
+                    min_eval = min(min_eval, eval)
+                    beta = min(beta, eval)
+                    if beta <= alpha:
+                        break
+        return min_eval
+    
 def is_capture(move,board):
     if chess_board[move[1]] != "-":
         return True
@@ -442,25 +457,16 @@ def is_capture(move,board):
         return False
 
 def get_comp_move(depth):
+    best_score = float('-inf')
     best_move = None
-    best_score = float('inf')
-
     for i, piece in enumerate(chess_board):
         if piece != "-" and piece[0] == "b":
-            moves = get_moves(i)
-            for move in moves:
-                temp_board = simulate_move(chess_board, i, move)
-                if not check_status(temp_board, "b"):
-                    score = evaluate_board(temp_board)
-                    if score < best_score:
-                        best_score = score
-                        best_move = (i, move)
-
-    print("Best Score:", best_score)
-    print("Best Move:", best_move)
-    return best_move if best_move else (12, 16)  # fallback
-    print(best_score)
-    print(best_move)
+            for move in get_moves(i):
+                new_board = simulate_move(chess_board, i, move)
+                score = minimax(new_board, depth-1, float('-inf'), float('inf'), False)
+                if score > best_score:
+                    best_score = score
+                    best_move = (i, move)
     return best_move
 
 # Game loop
@@ -475,7 +481,7 @@ while running:
     refresh_pieces(selected_piece if dragging else None)
     if turn == "b":
         # make random move
-        move = get_comp_move(1)
+        move = get_comp_move(2)
         move_piece(move[0], move[1])
         turn = "w"
         
