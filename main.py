@@ -1,3 +1,4 @@
+import asyncio
 import pygame
 import random
 # Screen settings
@@ -23,6 +24,7 @@ chess_board = [
     "wP", "wP", "wP", "wP", "wP", "wP", "wP", "wP",
     "wR", "wN", "wB", "wQ", "wK", "wB", "wN", "wR"
 ]
+START_BOARD = chess_board.copy()  # used to reset the board for "play again"
 
 # Draw chess board
 def draw_chess_board():
@@ -39,7 +41,8 @@ piece_images = {}
 def draw_piece(piece, pos):
     # Load each image once and reuse it; reloading from disk every frame causes flicker
     if piece not in piece_images:
-        data = pygame.image.load("images/" + piece + ".png")
+        # image files are lowercase (e.g. "bk.png"); the web is case-sensitive
+        data = pygame.image.load("images/" + piece.lower() + ".png")
         piece_images[piece] = pygame.transform.scale(data, (100, 100))
     screen.blit(piece_images[piece], (pos))
 
@@ -926,68 +929,118 @@ selected_piece = None
 dragging = False
 turn = "w"
 game_over = False   # when True the final position stays on screen until the window is closed
+frames_before_ai = 2  # frames to display the player's move before the computer starts thinking
 clock = pygame.time.Clock()
 
 def on_board(mouse_pos):
     x, y = mouse_pos
     return 100 <= x < 900 and 100 <= y < 900
 
+game_result = ""     # message shown on the game-over banner
+
 def game_finished(side_to_move):
     # Called after every move with the side whose turn it now is
+    global game_result
     if checkmate(side_to_move):
-        print("Black wins" if side_to_move == "w" else "White wins")
-        return True
-    if stalemate(side_to_move):
-        print("Stalemate - it's a draw")
-        return True
-    return False
+        game_result = "Checkmate - " + ("Black wins" if side_to_move == "w" else "White wins")
+    elif stalemate(side_to_move):
+        game_result = "Stalemate - Draw"
+    else:
+        return False
+    print(game_result)
+    return True
 
-while running:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-        elif event.type == pygame.MOUSEBUTTONDOWN and not game_over:
-            mouse_pos = pygame.mouse.get_pos()
-            if on_board(mouse_pos):
-                pos = get_board_pos(mouse_pos)
-                if chess_board[pos] != "-":
-                    selected_piece = pos
-                    dragging = True
-        elif event.type == pygame.MOUSEBUTTONUP:
-            if dragging:
+banner_fonts = None
+
+def draw_game_over(message):
+    # Plain box over the middle of the board using the board colours and pygame's default font
+    global banner_fonts
+    if banner_fonts is None:
+        pygame.font.init()
+        banner_fonts = (pygame.font.Font(None, 56), pygame.font.Font(None, 36))
+    box = pygame.Rect(200, 400, 600, 200)
+    pygame.draw.rect(screen, light_purple, box)
+    pygame.draw.rect(screen, dark_purple, box, 4)
+    for font, text, y in ((banner_fonts[0], message, 470), (banner_fonts[1], "Click to play again", 540)):
+        surface = font.render(text, True, black)
+        screen.blit(surface, surface.get_rect(center=(500, y)))
+
+def reset_game():
+    global last_move, turn, game_over, game_result, frames_before_ai, selected_piece, dragging
+    chess_board[:] = START_BOARD
+    castling_rights[:] = [True, True, True, True]
+    game_history.clear()
+    last_move = None
+    turn = "w"
+    game_over = False
+    game_result = ""
+    frames_before_ai = 2
+    selected_piece = None
+    dragging = False
+
+async def main():
+    # async so the game can also run in a web browser (pygbag); await hands control
+    # back to the browser once per frame. Runs exactly the same on the desktop.
+    global running, selected_piece, dragging, turn, game_over, frames_before_ai, game_result
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN and game_over:
+                reset_game()  # click anywhere on the game-over banner screen to play again
+            elif event.type == pygame.MOUSEBUTTONDOWN:
                 mouse_pos = pygame.mouse.get_pos()
                 if on_board(mouse_pos):
-                    new_pos = get_board_pos(mouse_pos)
-                    move = new_pos - selected_piece
-                    if chess_board[selected_piece][0] == turn and move in get_moves(selected_piece):
-                        move_piece(selected_piece, move)
-                        turn = "b" if turn == "w" else "w"
-                        if game_finished(turn):
-                            game_over = True
-                dragging = False
-                selected_piece = None
+                    pos = get_board_pos(mouse_pos)
+                    if chess_board[pos] != "-":
+                        selected_piece = pos
+                        dragging = True
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if dragging:
+                    mouse_pos = pygame.mouse.get_pos()
+                    if on_board(mouse_pos):
+                        new_pos = get_board_pos(mouse_pos)
+                        move = new_pos - selected_piece
+                        if chess_board[selected_piece][0] == turn and move in get_moves(selected_piece):
+                            move_piece(selected_piece, move)
+                            turn = "b" if turn == "w" else "w"
+                            if game_finished(turn):
+                                game_over = True
+                    dragging = False
+                    selected_piece = None
 
-    # Draw everything once per frame; the dragged piece is drawn last so it stays on top
-    screen.fill(black)
-    draw_chess_board()
-    refresh_pieces(selected_piece if dragging else None)
-    if dragging:
-        mouse_pos = pygame.mouse.get_pos()
-        draw_piece(chess_board[selected_piece], (mouse_pos[0] - 50, mouse_pos[1] - 50))
-    pygame.display.update()
+        # Draw everything once per frame; the dragged piece is drawn last so it stays on top
+        screen.fill(black)
+        draw_chess_board()
+        refresh_pieces(selected_piece if dragging else None)
+        if dragging:
+            mouse_pos = pygame.mouse.get_pos()
+            draw_piece(chess_board[selected_piece], (mouse_pos[0] - 50, mouse_pos[1] - 50))
+        if game_over:
+            draw_game_over(game_result)
+        pygame.display.update()
 
-    # The computer moves after the screen shows the player's move
-    if running and not game_over and turn == "b":
-        move = get_comp_move(3, max_depth=5, force_capture=True)
-        if move:
-            move_piece(move[0], move[1])
-            turn = "w"
-            if game_finished(turn):
+        # The computer moves only after the player's move has actually appeared on screen.
+        # In a browser the screen is only painted when we hand control back (await below),
+        # so first show a couple of frames with the player's move, then start thinking.
+        if running and not game_over and turn == "b" and frames_before_ai > 0:
+            frames_before_ai -= 1
+        elif running and not game_over and turn == "b":
+            frames_before_ai = 2
+            move = get_comp_move(3, max_depth=5, force_capture=True)
+            if move:
+                move_piece(move[0], move[1])
+                turn = "w"
+                if game_finished(turn):
+                    game_over = True
+            else:
+                print("No valid moves found for black")
+                game_result = "Game over"
                 game_over = True
-        else:
-            print("No valid moves found for black")
-            game_over = True
 
-    clock.tick(60)
+        clock.tick(60)
+        await asyncio.sleep(0)
 
-pygame.quit()
+    pygame.quit()
+
+asyncio.run(main())
